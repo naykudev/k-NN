@@ -32,7 +32,8 @@ import org.opensearch.index.IndexSettings;
 import org.opensearch.index.TieredMergePolicyProvider;
 import org.opensearch.index.codec.CodecServiceFactory;
 import org.opensearch.index.engine.EngineFactory;
-import org.opensearch.index.mapper.DynamicArrayFieldTypeInferencer;
+import org.opensearch.index.mapper.DynamicFieldTypeInferencer;
+import org.opensearch.index.mapper.DynamicTemplateTypeHandler;
 import org.opensearch.index.mapper.Mapper;
 import org.opensearch.index.query.QueryBuilder;
 import org.opensearch.index.shard.IndexSettingProvider;
@@ -43,6 +44,7 @@ import org.opensearch.knn.index.KNNSettings;
 import org.opensearch.knn.index.codec.KNNCodecService;
 import org.opensearch.knn.index.codec.derivedsource.DerivedSourceIndexOperationListener;
 import org.opensearch.knn.index.codec.nativeindex.NativeIndexBuildStrategyFactory;
+import org.opensearch.knn.index.mapper.KNNDynamicTemplateTypeHandler;
 import org.opensearch.knn.index.mapper.KNNVectorFieldMapper;
 import org.opensearch.knn.index.memory.NativeMemoryCacheManager;
 import org.opensearch.knn.index.memory.NativeMemoryLoadStrategy;
@@ -232,26 +234,13 @@ public class KNNPlugin extends Plugin
     }
 
     @Override
-    public List<DynamicArrayFieldTypeInferencer> getDynamicArrayFieldTypeInferencers() {
-        return Collections.singletonList(new DynamicArrayFieldTypeInferencer() {
-            private static final int MIN_VECTOR_DIMENSION = 128;
+    public List<DynamicFieldTypeInferencer> getDynamicFieldTypeInferencers() {
+        return Collections.singletonList(new KNNDynamicFieldTypeInferencer());
+    }
 
-            @Override
-            public String inferType(String fieldName, int arrayLength, boolean isNumericArray, org.opensearch.index.IndexSettings indexSettings) {
-                if (isNumericArray && arrayLength >= MIN_VECTOR_DIMENSION) {
-                    return KNNVectorFieldMapper.CONTENT_TYPE;
-                }
-                return null;
-            }
-
-            @Override
-            public java.util.Map<String, Object> getFieldConfiguration(String fieldName, int arrayLength) {
-                java.util.Map<String, Object> config = new java.util.HashMap<>();
-                config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
-                config.put("dimension", arrayLength);
-                return config;
-            }
-        });
+    @Override
+    public Map<String, DynamicTemplateTypeHandler> getDynamicTemplateTypes() {
+        return Map.of(KNNVectorFieldMapper.CONTENT_TYPE, new KNNDynamicTemplateTypeHandler());
     }
 
     @Override
