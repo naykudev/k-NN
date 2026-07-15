@@ -58,6 +58,22 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
         assertEquals(128, config.get(KNNConstants.DIMENSION));
     }
 
+    public void testInjectsTypeWhenAbsent() throws IOException {
+        // Template with an empty mapping block ({}): handler injects knn_vector type, then dimension.
+        Map<String, Object> config = new HashMap<>();
+        handler.adjustMappingConfig(config, arrayParserFactory(256));
+        assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
+        assertEquals(256, config.get(KNNConstants.DIMENSION));
+    }
+
+    public void testDoesNotOverrideUserType() throws IOException {
+        Map<String, Object> config = new HashMap<>();
+        config.put("type", "some_other_type");
+        config.put(KNNConstants.DIMENSION, 32);
+        handler.adjustMappingConfig(config, failingParserFactory());
+        assertEquals("some_other_type", config.get("type"));
+    }
+
     public void testDimensionPresentOpensNoParser() throws IOException {
         Map<String, Object> config = new HashMap<>();
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
