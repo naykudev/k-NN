@@ -40,13 +40,13 @@ public class KNNDynamicFieldTypeInferencer implements DynamicFieldTypeInferencer
      * Streams the buffered field value and returns a knn_vector mapping config if it is a flat
      * numeric array with at least {@link #MIN_VECTOR_DIMENSION} elements whose size is a multiple of 8.
      *
-     * @param parserFactory produces a fresh parser positioned at the field value's first token
+     * @param fieldValueParser produces a fresh parser positioned at the field value's first token
      * @return mutable config map {@code {type: knn_vector, dimension: N}} if claimed, or {@code null} to pass
      */
     @Override
-    public Map<String, Object> inferFieldType(FieldValueParserSupplier parserFactory) throws IOException {
+    public Map<String, Object> inferFieldType(FieldValueParserSupplier fieldValueParser) throws IOException {
         int count;
-        try (XContentParser parser = parserFactory.get()) {
+        try (XContentParser parser = fieldValueParser.get()) {
             if (parser.currentToken() != XContentParser.Token.START_ARRAY) {
                 return null;
             }

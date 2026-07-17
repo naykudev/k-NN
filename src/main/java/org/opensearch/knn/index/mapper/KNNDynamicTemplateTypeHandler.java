@@ -40,10 +40,10 @@ public class KNNDynamicTemplateTypeHandler implements DynamicTemplateTypeHandler
      * Only creates a parser when dimension is missing — fully-specified templates open nothing.
      *
      * @param mappingConfig the mutable mapping config from the matched template
-     * @param parserFactory produces a fresh parser positioned at the field value's first token
+     * @param fieldValueParser produces a fresh parser positioned at the field value's first token
      */
     @Override
-    public void adjustMappingConfig(Map<String, Object> mappingConfig, FieldValueParserSupplier parserFactory) throws IOException {
+    public void adjustMappingConfig(Map<String, Object> mappingConfig, FieldValueParserSupplier fieldValueParser) throws IOException {
         // The type is implied by match_mapping_type: "knn_vector", so a template may omit it from the
         // mapping block (or omit the block entirely). Inject it here so the TypeParser always receives a
         // complete config — the plugin owns its own type, core stays type-agnostic.
@@ -54,7 +54,7 @@ public class KNNDynamicTemplateTypeHandler implements DynamicTemplateTypeHandler
         if (isConfigComplete(mappingConfig)) {
             return;
         }
-        try (XContentParser parser = parserFactory.get()) {
+        try (XContentParser parser = fieldValueParser.get()) {
             if (parser.currentToken() != XContentParser.Token.START_ARRAY) {
                 return;
             }
