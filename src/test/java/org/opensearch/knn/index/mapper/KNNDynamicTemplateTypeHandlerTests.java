@@ -6,11 +6,8 @@
 package org.opensearch.knn.index.mapper;
 
 import org.opensearch.common.xcontent.LoggingDeprecationHandler;
-import org.opensearch.core.common.bytes.BytesArray;
 import org.opensearch.core.xcontent.MediaTypeRegistry;
 import org.opensearch.core.xcontent.NamedXContentRegistry;
-import org.opensearch.core.xcontent.XContentParser;
-import org.opensearch.common.xcontent.XContentHelper;
 import org.opensearch.index.mapper.FieldValueParserSupplier;
 import org.opensearch.knn.KNNTestCase;
 import org.opensearch.knn.common.KNNConstants;
@@ -23,45 +20,45 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
 
     private final KNNDynamicTemplateTypeHandler handler = new KNNDynamicTemplateTypeHandler();
 
-    /** Produces a parser positioned at the array value; fails the test if a "no parser expected" case opens it. */
-    private FieldValueParserSupplier arrayParserFactory(int dimension) {
-        return () -> {
-            StringBuilder sb = new StringBuilder("{\"vec\":[");
-            for (int i = 0; i < dimension; i++) {
-                if (i > 0) {
-                    sb.append(",");
-                }
-                sb.append("0.1");
+    /** A supplier over a flat numeric array of the given length — get() yields a parser at START_ARRAY. */
+    private FieldValueParserSupplier arraySupplier(int dimension) {
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < dimension; i++) {
+            if (i > 0) {
+                sb.append(",");
             }
-            sb.append("]}");
-            XContentParser parser = XContentHelper.createParser(
-                NamedXContentRegistry.EMPTY,
-                LoggingDeprecationHandler.INSTANCE,
-                new BytesArray(sb.toString()),
-                MediaTypeRegistry.JSON
-            );
-            parser.nextToken(); // START_OBJECT
-            parser.nextToken(); // FIELD_NAME
-            parser.nextToken(); // START_ARRAY
-            return parser;
-        };
+            sb.append("0.1");
+        }
+        sb.append("]");
+        return supplierOver(sb.toString());
     }
 
-    private FieldValueParserSupplier failingParserFactory() {
-        return () -> { throw new AssertionError("handler must not open the parser for a complete config"); };
+    /** A supplier over the given JSON value bytes; get() creates a parser positioned at the first token. */
+    private FieldValueParserSupplier supplierOver(String json) {
+        return new FieldValueParserSupplier(
+            MediaTypeRegistry.JSON,
+            NamedXContentRegistry.EMPTY,
+            LoggingDeprecationHandler.INSTANCE,
+            json.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        );
+    }
+
+    /** A supplier whose get() throws — asserts the handler must not read the value for a complete config. */
+    private FieldValueParserSupplier failingSupplier() {
+        return FieldValueParserSupplier.withoutValue();
     }
 
     public void testInjectsDimensionFromArrayLength() throws IOException {
         Map<String, Object> config = new HashMap<>();
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
-        handler.adjustMappingConfig(config, arrayParserFactory(128));
+        handler.adjustMappingConfig(config, arraySupplier(128));
         assertEquals(128, config.get(KNNConstants.DIMENSION));
     }
 
     public void testInjectsTypeWhenAbsent() throws IOException {
         // Template with an empty mapping block ({}): handler injects knn_vector type, then dimension.
         Map<String, Object> config = new HashMap<>();
-        handler.adjustMappingConfig(config, arrayParserFactory(256));
+        handler.adjustMappingConfig(config, arraySupplier(256));
         assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
         assertEquals(256, config.get(KNNConstants.DIMENSION));
     }
@@ -70,7 +67,7 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
         Map<String, Object> config = new HashMap<>();
         config.put("type", "some_other_type");
         config.put(KNNConstants.DIMENSION, 32);
-        handler.adjustMappingConfig(config, failingParserFactory());
+        handler.adjustMappingConfig(config, failingSupplier());
         assertEquals("some_other_type", config.get("type"));
     }
 
@@ -78,7 +75,7 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
         Map<String, Object> config = new HashMap<>();
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
         config.put(KNNConstants.DIMENSION, 64);
-        handler.adjustMappingConfig(config, failingParserFactory());
+        handler.adjustMappingConfig(config, failingSupplier());
         assertEquals(64, config.get(KNNConstants.DIMENSION));
     }
 
@@ -86,7 +83,7 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
         Map<String, Object> config = new HashMap<>();
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
         config.put(KNNConstants.MODEL_ID, "my-model");
-        handler.adjustMappingConfig(config, failingParserFactory());
+        handler.adjustMappingConfig(config, failingSupplier());
         assertFalse("dimension must not be injected when a model supplies it", config.containsKey(KNNConstants.DIMENSION));
     }
 
@@ -113,19 +110,8 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
     public void testNonArrayValueInjectsNoDimension() throws IOException {
         Map<String, Object> config = new HashMap<>();
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
-        FieldValueParserSupplier scalarFactory = () -> {
-            XContentParser parser = XContentHelper.createParser(
-                NamedXContentRegistry.EMPTY,
-                LoggingDeprecationHandler.INSTANCE,
-                new BytesArray("{\"vec\":\"not-an-array\"}"),
-                MediaTypeRegistry.JSON
-            );
-            parser.nextToken(); // START_OBJECT
-            parser.nextToken(); // FIELD_NAME
-            parser.nextToken(); // VALUE_STRING
-            return parser;
-        };
-        handler.adjustMappingConfig(config, scalarFactory);
+        // Field value is a string, not an array — handler must not infer a dimension.
+        handler.adjustMappingConfig(config, supplierOver("\"not-an-array\""));
         assertFalse(config.containsKey(KNNConstants.DIMENSION));
     }
 }
