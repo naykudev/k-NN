@@ -38,7 +38,7 @@ public class KNNDynamicFieldTypeInferencer implements DynamicFieldTypeInferencer
 
     /**
      * Streams the buffered field value and returns a knn_vector mapping config if it is a flat
-     * numeric array with at least {@link #MIN_VECTOR_DIMENSION} elements whose size is a multiple of 8.
+     * numeric array with at least {@link #MIN_VECTOR_DIMENSION} elements.
      *
      * @param fieldValueParser produces a fresh parser positioned at the field value's first token
      * @return mutable config map {@code {type: knn_vector, dimension: N}} if claimed, or {@code null} to pass
@@ -60,7 +60,7 @@ public class KNNDynamicFieldTypeInferencer implements DynamicFieldTypeInferencer
                 count++;
             }
         }
-        if (count < MIN_VECTOR_DIMENSION || count % 8 != 0) {
+        if (count < MIN_VECTOR_DIMENSION) {
             return null;
         }
         Map<String, Object> config = new HashMap<>();
