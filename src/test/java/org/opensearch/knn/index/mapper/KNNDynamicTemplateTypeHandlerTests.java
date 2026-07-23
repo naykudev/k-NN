@@ -117,6 +117,45 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
         assertFalse(config.containsKey("type"));
     }
 
+    // --- Knn-specific param (no type) signals intent, claims with no threshold ------------------
+
+    public void testDataTypeOnlyClaimsBelowThreshold() throws IOException {
+        // { data_type: float } is a knn-specific param — claim with no threshold, inject type + dimension.
+        Map<String, Object> config = new HashMap<>();
+        config.put(KNNConstants.VECTOR_DATA_TYPE_FIELD, "float");
+        assertTrue(handler.adjustMappingConfig(config, arraySupplier(16)));
+        assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
+        assertEquals(16, config.get(KNNConstants.DIMENSION));
+    }
+
+    public void testMethodOnlyClaimsBelowThreshold() throws IOException {
+        // { method: {...} } is a knn-specific param — claim with no threshold.
+        Map<String, Object> config = new HashMap<>();
+        config.put(KNNConstants.KNN_METHOD, new HashMap<>());
+        assertTrue(handler.adjustMappingConfig(config, arraySupplier(10)));
+        assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
+        assertEquals(10, config.get(KNNConstants.DIMENSION));
+    }
+
+    // --- Generic params are intent-neutral: behave like an empty block (threshold decides) ------
+
+    public void testGenericParamOnlyBelowThresholdDeclines() throws IOException {
+        // { store: true } carries no vector intent — apply the threshold; 64 < 128 declines.
+        Map<String, Object> config = new HashMap<>();
+        config.put("store", true);
+        assertFalse(handler.adjustMappingConfig(config, arraySupplier(64)));
+        assertFalse(config.containsKey("type"));
+    }
+
+    public void testGenericParamOnlyAtThresholdClaims() throws IOException {
+        // { store: true } + 128-element array — threshold met, claim and inject type + dimension.
+        Map<String, Object> config = new HashMap<>();
+        config.put("store", true);
+        assertTrue(handler.adjustMappingConfig(config, arraySupplier(128)));
+        assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
+        assertEquals(128, config.get(KNNConstants.DIMENSION));
+    }
+
     // --- Not ours -------------------------------------------------------------------------------
 
     public void testDeclinesOtherExplicitType() throws IOException {
@@ -124,6 +163,27 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
         config.put("type", "some_other_type");
         assertFalse(handler.adjustMappingConfig(config, failingSupplier()));
         assertEquals("some_other_type", config.get("type"));
+    }
+
+    public void testUnknownParamNoTypeDeclines() throws IOException {
+        // A stray unknown param with no knn type/signal — not ours; decline so it falls through.
+        Map<String, Object> config = new HashMap<>();
+        config.put("bogus_param", "x");
+        assertFalse(handler.adjustMappingConfig(config, arraySupplier(200)));
+        assertFalse(config.containsKey("type"));
+    }
+
+    public void testExplicitTypeWithUnknownParamClaimsAndLeavesItForTypeParser() throws IOException {
+        // Explicit type: knn_vector with a typo'd param — claim it (do NOT silently decline). The unknown
+        // key stays in the config so KNNVectorFieldMapper.TypeParser reports a clear error downstream.
+        Map<String, Object> config = new HashMap<>();
+        config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
+        config.put("dimesnion", 128); // deliberate typo
+        assertTrue(handler.adjustMappingConfig(config, arraySupplier(200)));
+        assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
+        assertTrue("typo'd key must remain for the TypeParser to reject", config.containsKey("dimesnion"));
+        // dimension is inferred from the array because the real 'dimension' key is absent
+        assertEquals(200, config.get(KNNConstants.DIMENSION));
     }
 
     // --- isConfigComplete -----------------------------------------------------------------------
