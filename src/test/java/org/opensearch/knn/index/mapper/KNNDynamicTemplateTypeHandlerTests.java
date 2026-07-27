@@ -15,8 +15,6 @@ import org.opensearch.knn.common.KNNConstants;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
 
 public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
 
@@ -24,8 +22,15 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
 
     /** A supplier over a flat numeric array of the given length — get() yields a parser at START_ARRAY. */
     private FieldValueParserSupplier arraySupplier(int dimension) {
-        String json = "[" + IntStream.range(0, dimension).mapToObj(i -> "0.1").collect(Collectors.joining(",")) + "]";
-        return supplierOver(json);
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < dimension; i++) {
+            if (i > 0) {
+                sb.append(",");
+            }
+            sb.append("0.1");
+        }
+        sb.append("]");
+        return supplierOver(sb.toString());
     }
 
     /** A supplier over the given JSON value bytes; get() creates a parser positioned at the first token. */
@@ -43,22 +48,34 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
         return FieldValueParserSupplier.withoutValue();
     }
 
-    // --- Explicit knn intent (type: knn_vector) -------------------------------------------------
-
-    public void testClaimsAndInjectsDimensionFromArrayLength() throws IOException {
-        // type: knn_vector without dimension — claimed, dimension injected from array length, no threshold.
+    public void testInjectsDimensionFromArrayLength() throws IOException {
         Map<String, Object> config = new HashMap<>();
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
-        assertTrue(handler.adjustMappingConfig(config, arraySupplier(64)));
-        assertEquals(64, config.get(KNNConstants.DIMENSION));
+        handler.adjustMappingConfig(config, arraySupplier(128));
+        assertEquals(128, config.get(KNNConstants.DIMENSION));
+    }
+
+    public void testInjectsTypeWhenAbsent() throws IOException {
+        // Template with an empty mapping block ({}): handler injects knn_vector type, then dimension.
+        Map<String, Object> config = new HashMap<>();
+        handler.adjustMappingConfig(config, arraySupplier(256));
+        assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
+        assertEquals(256, config.get(KNNConstants.DIMENSION));
+    }
+
+    public void testDoesNotOverrideUserType() throws IOException {
+        Map<String, Object> config = new HashMap<>();
+        config.put("type", "some_other_type");
+        config.put(KNNConstants.DIMENSION, 32);
+        handler.adjustMappingConfig(config, failingSupplier());
+        assertEquals("some_other_type", config.get("type"));
     }
 
     public void testDimensionPresentOpensNoParser() throws IOException {
-        // Complete config — claimed with no read.
         Map<String, Object> config = new HashMap<>();
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
         config.put(KNNConstants.DIMENSION, 64);
-        assertTrue(handler.adjustMappingConfig(config, failingSupplier()));
+        handler.adjustMappingConfig(config, failingSupplier());
         assertEquals(64, config.get(KNNConstants.DIMENSION));
     }
 
@@ -66,67 +83,9 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
         Map<String, Object> config = new HashMap<>();
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
         config.put(KNNConstants.MODEL_ID, "my-model");
-        assertTrue(handler.adjustMappingConfig(config, failingSupplier()));
+        handler.adjustMappingConfig(config, failingSupplier());
         assertFalse("dimension must not be injected when a model supplies it", config.containsKey(KNNConstants.DIMENSION));
     }
-
-    // --- Knn signal without an explicit type (dimension / model_id only) ------------------------
-
-    public void testDimensionOnlyInjectsTypeAndClaims() throws IOException {
-        // { dimension: 32 } with no type — explicit knn signal, so claimed with no read and no threshold.
-        Map<String, Object> config = new HashMap<>();
-        config.put(KNNConstants.DIMENSION, 32);
-        assertTrue(handler.adjustMappingConfig(config, failingSupplier()));
-        assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
-        assertEquals(32, config.get(KNNConstants.DIMENSION));
-    }
-
-    public void testModelIdOnlyInjectsTypeAndClaims() throws IOException {
-        Map<String, Object> config = new HashMap<>();
-        config.put(KNNConstants.MODEL_ID, "my-model");
-        assertTrue(handler.adjustMappingConfig(config, failingSupplier()));
-        assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
-        assertFalse(config.containsKey(KNNConstants.DIMENSION));
-    }
-
-    // --- Empty block — length threshold decides -------------------------------------------------
-
-    public void testEmptyBlockClaimsAtThreshold() throws IOException {
-        Map<String, Object> config = new HashMap<>();
-        assertTrue(handler.adjustMappingConfig(config, arraySupplier(128)));
-        assertEquals(KNNVectorFieldMapper.CONTENT_TYPE, config.get("type"));
-        assertEquals(128, config.get(KNNConstants.DIMENSION));
-    }
-
-    public void testEmptyBlockClaimsNonMultipleOfEightAboveThreshold() throws IOException {
-        Map<String, Object> config = new HashMap<>();
-        assertTrue(handler.adjustMappingConfig(config, arraySupplier(300)));
-        assertEquals(300, config.get(KNNConstants.DIMENSION));
-    }
-
-    public void testEmptyBlockDeclinesBelowThreshold() throws IOException {
-        Map<String, Object> config = new HashMap<>();
-        assertFalse(handler.adjustMappingConfig(config, arraySupplier(127)));
-        assertFalse(config.containsKey("type"));
-        assertFalse(config.containsKey(KNNConstants.DIMENSION));
-    }
-
-    public void testEmptyBlockDeclinesNonArray() throws IOException {
-        Map<String, Object> config = new HashMap<>();
-        assertFalse(handler.adjustMappingConfig(config, supplierOver("\"not-an-array\"")));
-        assertFalse(config.containsKey("type"));
-    }
-
-    // --- Not ours -------------------------------------------------------------------------------
-
-    public void testDeclinesOtherExplicitType() throws IOException {
-        Map<String, Object> config = new HashMap<>();
-        config.put("type", "some_other_type");
-        assertFalse(handler.adjustMappingConfig(config, failingSupplier()));
-        assertEquals("some_other_type", config.get("type"));
-    }
-
-    // --- isConfigComplete -----------------------------------------------------------------------
 
     public void testIsConfigCompleteWithDimension() {
         Map<String, Object> config = new HashMap<>();
@@ -146,5 +105,13 @@ public class KNNDynamicTemplateTypeHandlerTests extends KNNTestCase {
         Map<String, Object> config = new HashMap<>();
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
         assertFalse(handler.isConfigComplete(config));
+    }
+
+    public void testNonArrayValueInjectsNoDimension() throws IOException {
+        Map<String, Object> config = new HashMap<>();
+        config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
+        // Field value is a string, not an array — handler must not infer a dimension.
+        handler.adjustMappingConfig(config, supplierOver("\"not-an-array\""));
+        assertFalse(config.containsKey(KNNConstants.DIMENSION));
     }
 }

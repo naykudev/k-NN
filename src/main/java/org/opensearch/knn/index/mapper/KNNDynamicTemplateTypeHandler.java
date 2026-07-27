@@ -16,95 +16,58 @@ import java.util.Map;
 /**
  * k-NN implementation of {@link DynamicTemplateTypeHandler}.
  *
- * <p>Registered against a dynamic template with {@code match_mapping_type: "array"}. Core detects only
- * that an unmapped field's value is an array and offers the matched template to this handler, which
- * decides whether the array is actually a {@code knn_vector} and, if so, completes the config before
- * {@code KNNVectorFieldMapper.TypeParser} builds the mapper.
+ * <p>Called by core when a dynamic template with {@code match_mapping_type: "knn_vector"} matches
+ * an unmapped field. Runs <em>before</em> {@code TypeParser.parse()} so that any required parameters
+ * are present when the mapper is constructed.
  *
- * <p>The claim decision depends on the template's {@code mapping} block:
- * <ul>
- *   <li><b>Explicit knn intent</b> — the block sets {@code type: knn_vector}, or supplies a knn-specific
- *       parameter ({@code dimension} or {@code model_id}) with no other type. The field is claimed with
- *       no length threshold; {@code dimension} is injected from the array length only when neither it nor
- *       a {@code model_id} is present.</li>
- *   <li><b>Empty block</b> — no type and no knn signal. The array length decides: {@code >= }
- *       {@link #MIN_VECTOR_DIMENSION} is claimed as {@code knn_vector} (dimension injected), otherwise the
- *       handler declines and the field falls through to normal element-wise array parsing.</li>
- *   <li><b>A different explicit type</b> — declined; not ours.</li>
- * </ul>
+ * <p>The only adjustment made is injecting {@code dimension} from the array length when the user
+ * did not specify it in the template. Without dimension, {@code KNNVectorFieldMapper.TypeParser}
+ * would throw "Dimension value missing."
  *
- * <p>A fully-specified config ({@code dimension} or {@code model_id} present) never opens a parser, so
- * core can also validate such templates eagerly at index-creation time.
+ * <p>If the user already specified {@code dimension} (or a {@code model_id} that supplies it) in the
+ * template mapping config, the existing value is preserved — this handler never overwrites a
+ * user-provided dimension, and it never even opens a parser in that case. Because a complete config
+ * opens no parser, core can also validate such templates eagerly at index-creation time.
+ *
+ * <p>If the field value is not an array (e.g. the template matched via a path pattern on a
+ * non-array field), the handler does nothing — the TypeParser will validate the config and reject
+ * it if dimension is truly required.
  */
 public class KNNDynamicTemplateTypeHandler implements DynamicTemplateTypeHandler {
 
-    static final int MIN_VECTOR_DIMENSION = 128;
-
     /**
-     * Decides whether the matched {@code array} template's field is a {@code knn_vector} and, if so,
-     * completes the mapping config (injects {@code type} and, when needed, {@code dimension}).
+     * Injects {@code dimension} into the mapping config from the array length if not already present.
+     * Only creates a parser when dimension is missing — fully-specified templates open nothing.
      *
      * @param mappingConfig the mutable mapping config from the matched template
      * @param fieldValueParser produces a fresh parser positioned at the field value's first token
-     * @return {@code true} if this handler claims the field as a knn_vector, {@code false} to decline it
      */
     @Override
-    public boolean adjustMappingConfig(Map<String, Object> mappingConfig, FieldValueParserSupplier fieldValueParser) throws IOException {
-        Object typeNode = mappingConfig.get("type");
-        // An explicit type that isn't knn_vector is not ours — decline and let another handler or the
-        // normal array path take it.
-        if (typeNode != null && KNNVectorFieldMapper.CONTENT_TYPE.equals(typeNode.toString()) == false) {
-            return false;
+    public void adjustMappingConfig(Map<String, Object> mappingConfig, FieldValueParserSupplier fieldValueParser) throws IOException {
+        // The type is implied by match_mapping_type: "knn_vector", so a template may omit it from the
+        // mapping block (or omit the block entirely). Inject it here so the TypeParser always receives a
+        // complete config — the plugin owns its own type, core stays type-agnostic.
+        mappingConfig.putIfAbsent("type", KNNVectorFieldMapper.CONTENT_TYPE);
+        // A complete config needs no data-derived parameter, so we must not open the parser: doing so
+        // would defer index-creation-time validation, and injecting a data-derived dimension alongside
+        // a model_id is rejected by the TypeParser.
+        if (isConfigComplete(mappingConfig)) {
+            return;
         }
-
-        // Explicit knn intent: the user wrote type: knn_vector, or gave a knn-specific parameter
-        // (dimension / model_id). Honor it with no length threshold.
-        boolean explicitKnn = typeNode != null || isConfigComplete(mappingConfig);
-        if (explicitKnn) {
-            mappingConfig.putIfAbsent("type", KNNVectorFieldMapper.CONTENT_TYPE);
-            // A complete config needs no data-derived parameter, so we must not open the parser: doing so
-            // would defer index-creation-time validation, and injecting a data-derived dimension alongside
-            // a model_id is rejected by the TypeParser.
-            if (isConfigComplete(mappingConfig)) {
-                return true;
-            }
-            // type: knn_vector without a dimension — inject it from the array length (no threshold). If the
-            // value is not an array, leave the config as-is; the TypeParser reports the missing dimension.
-            try (XContentParser parser = fieldValueParser.get()) {
-                if (parser.currentToken() == XContentParser.Token.START_ARRAY) {
-                    mappingConfig.put(KNNConstants.DIMENSION, countArray(parser));
-                }
-            }
-            return true;
-        }
-
-        // Empty block, no explicit type or knn signal: let the array length decide. Only claim arrays at
-        // or above the minimum dimension; anything shorter (or non-array) falls through to normal parsing.
         try (XContentParser parser = fieldValueParser.get()) {
             if (parser.currentToken() != XContentParser.Token.START_ARRAY) {
-                return false;
+                return;
             }
-            int count = countArray(parser);
-            if (count < MIN_VECTOR_DIMENSION) {
-                return false;
+            int count = 0;
+            while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
+                count++;
             }
-            mappingConfig.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
             mappingConfig.put(KNNConstants.DIMENSION, count);
         }
-        return true;
-    }
-
-    /** Counts the elements of the array the parser is currently positioned on (at START_ARRAY). */
-    private static int countArray(XContentParser parser) throws IOException {
-        int count = 0;
-        while (parser.nextToken() != XContentParser.Token.END_ARRAY) {
-            count++;
-        }
-        return count;
     }
 
     /**
-     * A knn_vector config is fully specified when the dimension is given directly, or when a
+     * A knn_vector template is fully specified when the dimension is given directly, or when a
      * {@code model_id} supplies it. In both cases the mapper can be built without inspecting a
      * document, so core can validate the template eagerly at index-creation time.
      */
