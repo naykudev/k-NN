@@ -44,19 +44,22 @@ public class KNNDynamicFieldTypeInferencerTests extends KNNTestCase {
         assertEquals(128, config.get("dimension"));
     }
 
-    public void testClaimsNonMultipleOfEightDimension() throws IOException {
-        // 130 and 300 are >= 128 but not multiples of 8 — must still be claimed (no %8 gate).
-        Map<String, Object> config130 = inferencer.inferFieldType(numericArray(130));
-        assertNotNull("130-dim array must be inferred as knn_vector", config130);
-        assertEquals(130, config130.get("dimension"));
+    public void testClaimsMultipleOfEightAboveThreshold() throws IOException {
+        // 256 is >= 128 and a multiple of 8 — claimed.
+        Map<String, Object> config = inferencer.inferFieldType(numericArray(256));
+        assertNotNull("256-dim array must be inferred as knn_vector", config);
+        assertEquals(256, config.get("dimension"));
+    }
 
-        Map<String, Object> config300 = inferencer.inferFieldType(numericArray(300));
-        assertNotNull("300-dim array must be inferred as knn_vector", config300);
-        assertEquals(300, config300.get("dimension"));
+    public void testNonMultipleOfEightNotClaimed() throws IOException {
+        // 130 and 300 are >= 128 but not multiples of 8 — must NOT be claimed (%8 gate).
+        assertNull("130-dim array is not a multiple of 8", inferencer.inferFieldType(numericArray(130)));
+        assertNull("300-dim array is not a multiple of 8", inferencer.inferFieldType(numericArray(300)));
     }
 
     public void testBelowThresholdNotClaimed() throws IOException {
-        assertNull(inferencer.inferFieldType(numericArray(127)));
+        // 128 is a multiple of 8 but the check is dimension first; 120 is a multiple of 8 but below threshold.
+        assertNull(inferencer.inferFieldType(numericArray(120)));
     }
 
     public void testNonNumericArrayNotClaimed() throws IOException {

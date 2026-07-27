@@ -18,9 +18,9 @@ import java.util.Map;
  * k-NN implementation of {@link DynamicFieldTypeInferencer}.
  *
  * <p>Claims unmapped fields whose value is a flat numeric array with at least
- * {@link #MIN_VECTOR_DIMENSION} elements and maps them as {@code knn_vector}.
- * The dimension is inferred from the array length of the first document — subsequent
- * documents with a different dimension are rejected by the mapper.
+ * {@link #MIN_VECTOR_DIMENSION} elements whose count is a multiple of 8, and maps them as
+ * {@code knn_vector}. The dimension is inferred from the array length of the first document —
+ * subsequent documents with a different dimension are rejected by the mapper.
  *
  * <p>Core hands a factory that produces a fresh parser over the buffered field bytes. We stream
  * the tokens directly rather than materializing a {@code List}: the value must be an array whose
@@ -38,7 +38,7 @@ public class KNNDynamicFieldTypeInferencer implements DynamicFieldTypeInferencer
 
     /**
      * Streams the buffered field value and returns a knn_vector mapping config if it is a flat
-     * numeric array with at least {@link #MIN_VECTOR_DIMENSION} elements.
+     * numeric array with at least {@link #MIN_VECTOR_DIMENSION} elements whose count is a multiple of 8.
      *
      * @param fieldValueParser produces a fresh parser positioned at the field value's first token
      * @return mutable config map {@code {type: knn_vector, dimension: N}} if claimed, or {@code null} to pass
@@ -60,7 +60,7 @@ public class KNNDynamicFieldTypeInferencer implements DynamicFieldTypeInferencer
                 count++;
             }
         }
-        if (count < MIN_VECTOR_DIMENSION) {
+        if (count < MIN_VECTOR_DIMENSION || count % 8 != 0) {
             return null;
         }
         Map<String, Object> config = new HashMap<>();
