@@ -5,8 +5,8 @@
 
 package org.opensearch.knn.plugin;
 
-import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.mapper.DynamicFieldTypeInferencer;
+import org.opensearch.index.mapper.DynamicValueSummary;
 import org.opensearch.index.mapper.FieldValueParserSupplier;
 import org.opensearch.knn.index.mapper.KNNVectorFieldMapper;
 
@@ -22,44 +22,32 @@ import java.util.Map;
  * {@code knn_vector}. The dimension is inferred from the array length of the first document —
  * subsequent documents with a different dimension are rejected by the mapper.
  *
- * <p>Core hands a factory that produces a fresh parser over the buffered field bytes. We stream
- * the tokens directly rather than materializing a {@code List}: the value must be an array whose
- * every element is a JSON number ({@code VALUE_NUMBER}). That single token check rejects strings,
- * booleans, nulls, and nested arrays/objects (which appear as {@code START_ARRAY}/{@code START_OBJECT}),
- * so a mixed-type array like {@code [1.0, "hello", ...]} falls through to the normal float path
- * instead of being wrongly claimed as a vector.
- *
- * <p>Returns {@code null} for any field that doesn't meet all conditions, allowing subsequent
- * inferencers or the default float fallback to handle it.
+ * <p>Core classifies the buffered value ({@link DynamicValueSummary}) and passes the shape + array
+ * length, so this inferencer no longer streams the tokens itself to answer "is this a flat numeric
+ * array." It only applies the k-NN gate (≥ {@link #MIN_VECTOR_DIMENSION} and a multiple of 8) — a
+ * plugin-side policy that can be relaxed without any core change. Below-threshold or non-numeric
+ * arrays are declined (return {@code null}), so they fall through to the normal float path — the
+ * gated "middle path": core classifies, but k-NN does not claim every numeric array.
  */
 public class KNNDynamicFieldTypeInferencer implements DynamicFieldTypeInferencer {
 
     static final int MIN_VECTOR_DIMENSION = 128;
 
     /**
-     * Streams the buffered field value and returns a knn_vector mapping config if it is a flat
-     * numeric array with at least {@link #MIN_VECTOR_DIMENSION} elements whose count is a multiple of 8.
+     * Returns a knn_vector mapping config when core reports a flat numeric array whose length is at
+     * least {@link #MIN_VECTOR_DIMENSION} and a multiple of 8; otherwise {@code null} to pass.
      *
-     * @param fieldValueParser produces a fresh parser positioned at the field value's first token
+     * @param summary core's classification of the value shape and array length
+     * @param fieldValueParser unused here — the summary already carries everything k-NN needs
      * @return mutable config map {@code {type: knn_vector, dimension: N}} if claimed, or {@code null} to pass
      */
     @Override
-    public Map<String, Object> inferFieldType(FieldValueParserSupplier fieldValueParser) throws IOException {
-        int count;
-        try (XContentParser parser = fieldValueParser.get()) {
-            if (parser.currentToken() != XContentParser.Token.START_ARRAY) {
-                return null;
-            }
-            count = 0;
-            XContentParser.Token token;
-            while ((token = parser.nextToken()) != XContentParser.Token.END_ARRAY) {
-                // Any non-number element (string, boolean, null, nested array/object) disqualifies the field.
-                if (token != XContentParser.Token.VALUE_NUMBER) {
-                    return null;
-                }
-                count++;
-            }
+    public Map<String, Object> inferFieldType(DynamicValueSummary summary, FieldValueParserSupplier fieldValueParser)
+        throws IOException {
+        if (summary.isFlatNumericArray() == false) {
+            return null;
         }
+        int count = summary.arrayLength();
         if (count < MIN_VECTOR_DIMENSION || count % 8 != 0) {
             return null;
         }
