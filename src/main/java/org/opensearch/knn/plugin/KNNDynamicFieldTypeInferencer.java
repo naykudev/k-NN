@@ -13,6 +13,7 @@ import org.opensearch.knn.index.mapper.KNNVectorFieldMapper;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * k-NN implementation of {@link DynamicFieldTypeInferencer}.
@@ -55,5 +56,15 @@ public class KNNDynamicFieldTypeInferencer implements DynamicFieldTypeInferencer
         config.put("type", KNNVectorFieldMapper.CONTENT_TYPE);
         config.put("dimension", count);
         return config;
+    }
+
+    /**
+     * k-NN exclusively reserves flat numeric arrays: no other plugin may claim a numeric array as its
+     * own type. When k-NN declines (below the dimension threshold or not a multiple of 8), the array
+     * still falls through to core's built-in per-element handling (float/long) — never to another plugin.
+     */
+    @Override
+    public Set<DynamicValueSummary.ValueShape> reservedShapes() {
+        return Set.of(DynamicValueSummary.ValueShape.FLAT_NUMERIC_ARRAY);
     }
 }
